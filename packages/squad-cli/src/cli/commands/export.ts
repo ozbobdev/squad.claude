@@ -1,6 +1,11 @@
 /**
- * Export command — port from beta CLI
- * Exports squad to squad-export.json
+ * Export command — routes between snapshot (JSON) and coordinator (agent) exports.
+ *
+ * Usage:
+ *   squad export              → JSON snapshot (default, backward-compatible)
+ *   squad export snapshot     → JSON snapshot (explicit)
+ *   squad export agent [...]  → Coordinator agent (.github/agents/squad.md)
+ *   squad export --format agent [...]  → Same as above
  */
 
 import path from 'node:path';
@@ -18,10 +23,65 @@ interface ExportManifest {
   skills: string[];
 }
 
+type ExportMode = 'snapshot' | 'agent';
+
 /**
- * Export squad to JSON
+ * Resolve which export mode to use based on argv.
  */
-export async function runExport(dest: string, outPath?: string): Promise<void> {
+function resolveExportMode(args: string[]): { mode: ExportMode; remainingArgs: string[] } {
+  if (args.length === 0) {
+    return { mode: 'snapshot', remainingArgs: [] };
+  }
+
+  const firstArg = args[0];
+
+  // Explicit subcommand
+  if (firstArg === 'agent') {
+    return { mode: 'agent', remainingArgs: args.slice(1) };
+  }
+  if (firstArg === 'snapshot') {
+    return { mode: 'snapshot', remainingArgs: args.slice(1) };
+  }
+
+  // --format flag
+  const formatIdx = args.indexOf('--format');
+  if (formatIdx !== -1) {
+    const format = args[formatIdx + 1];
+    const remaining = [...args.slice(0, formatIdx), ...args.slice(formatIdx + 2)];
+    if (format === 'agent') return { mode: 'agent', remainingArgs: remaining };
+    if (format === 'snapshot') return { mode: 'snapshot', remainingArgs: remaining };
+  }
+
+  // Default: snapshot (backward-compatible)
+  return { mode: 'snapshot', remainingArgs: args };
+}
+
+/**
+ * Export command router — dispatches to snapshot or coordinator export.
+ */
+export async function runExport(dest: string, args?: string[] | string): Promise<void> {
+  // Backward-compat: if called with a string (old outPath signature), wrap it
+  const normalizedArgs: string[] = args === undefined ? []
+    : typeof args === 'string' ? ['--out', args]
+    : args;
+
+  const { mode, remainingArgs } = resolveExportMode(normalizedArgs);
+
+  if (mode === 'agent') {
+    const { runCoordinatorExport } = await import('./export-coordinator.js');
+    return runCoordinatorExport(dest, remainingArgs);
+  }
+
+  // Parse --out from remaining args for snapshot mode
+  const outIdx = remainingArgs.indexOf('--out');
+  const outPath = (outIdx !== -1 && remainingArgs[outIdx + 1]) ? remainingArgs[outIdx + 1] : undefined;
+  return runSnapshotExport(dest, outPath);
+}
+
+/**
+ * Legacy-compatible JSON snapshot export.
+ */
+async function runSnapshotExport(dest: string, outPath?: string): Promise<void> {
   const storage = new FSStorageProvider();
   const squadInfo = detectSquadDir(dest);
   const teamMd = path.join(squadInfo.path, 'team.md');

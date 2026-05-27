@@ -203,8 +203,11 @@ async function main(): Promise<void> {
     console.log(`             Usage: copilot [--off] [--auto-assign]`);
     console.log(`  ${BOLD}plugin${RESET}     Manage plugin marketplaces`);
     console.log(`             Usage: plugin marketplace add|remove|list|browse`);
-    console.log(`  ${BOLD}export${RESET}     Export squad to a portable JSON snapshot`);
-    console.log(`             Default: squad-export.json (use --out <path> to override)`);
+    console.log(`  ${BOLD}export${RESET}     Export squad (snapshot or coordinator agent)`);
+    console.log(`             squad export              JSON snapshot (default)`);
+    console.log(`             squad export agent        Coordinator → .github/agents/squad.md`);
+    console.log(`             squad export agent --watch  Re-export on changes`);
+    console.log(`             squad export agent --check  Detect drift without writing`);
     console.log(`  ${BOLD}import${RESET}     Import squad from an export file`);
     console.log(`             Usage: import <file> [--force]`);
     console.log(`  ${BOLD}scrub-emails${RESET}  Remove email addresses from Squad state files`);
@@ -637,10 +640,9 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'export') {
+    // Routes to './cli/commands/export-coordinator.js' for agent mode
     const { runExport } = await import('./cli/commands/export.js');
-    const outIdx = args.indexOf('--out');
-    const outPath = (outIdx !== -1 && args[outIdx + 1]) ? args[outIdx + 1] : undefined;
-    await runExport(getSquadStartDir(), outPath);
+    await runExport(getSquadStartDir(), args.slice(1));
     return;
   }
 
