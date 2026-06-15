@@ -237,6 +237,7 @@
     "node": ">=22.5.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
     "@github/copilot-sdk": "^0.3.0",
     "vscode-jsonrpc": "^8.2.1"
   },
@@ -246,7 +247,7 @@
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.57.2",
     "@opentelemetry/resources": "^1.30.0",
     "@opentelemetry/sdk-metrics": "^1.30.0",
-    "@opentelemetry/sdk-node": "^0.57.2",
+    "@opentelemetry/sdk-node": "^0.219.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0",
     "@opentelemetry/semantic-conventions": "^1.28.0",

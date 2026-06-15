@@ -8,6 +8,7 @@
  */
 
 import { CopilotClient } from "@github/copilot-sdk";
+import { AnthropicSessionAdapter } from './anthropic-adapter.js';
 import { trace, SpanStatusCode } from '../runtime/otel-api.js';
 import { recordSessionCreated, recordSessionClosed, recordSessionError, recordTokenUsage } from '../runtime/otel-metrics.js';
 import { estimateCost } from '../config/models.js';
@@ -239,6 +240,13 @@ export interface SquadClientOptions {
    * @default 1000
    */
   reconnectDelayMs?: number;
+
+  /**
+   * Skip Copilot CLI startup and route all sessions through the Anthropic adapter.
+   * Requires ANTHROPIC_API_KEY or config.provider.apiKey on each createSession call.
+   * @default false
+   */
+  anthropicMode?: boolean;
 }
 
 /**
@@ -302,6 +310,7 @@ export class SquadClient {
       maxReconnectAttempts: options.maxReconnectAttempts ?? 3,
       reconnectDelayMs: options.reconnectDelayMs ?? 1000,
       eventBus: options.eventBus,
+      anthropicMode: options.anthropicMode ?? false,
     };
 
     this.client = new CopilotClient({
@@ -346,6 +355,11 @@ export class SquadClient {
    * @throws Error if connection fails or protocol version is incompatible
    */
   async connect(): Promise<void> {
+    if (this.options.anthropicMode) {
+      this.state = 'connected';
+      return;
+    }
+
     if (this.state === "connected") {
       return;
     }
@@ -404,6 +418,11 @@ export class SquadClient {
    * @returns Promise that resolves with any errors encountered during cleanup
    */
   async disconnect(): Promise<Error[]> {
+    if (this.options.anthropicMode) {
+      this.state = 'connected';
+      return Promise.resolve([]);
+    }
+
     const span = tracer.startSpan('squad.client.disconnect');
     try {
       this.manualDisconnect = true;
@@ -433,6 +452,11 @@ export class SquadClient {
    * Use only when disconnect() fails or hangs.
    */
   async forceDisconnect(): Promise<void> {
+    if (this.options.anthropicMode) {
+      this.state = 'connected';
+      return;
+    }
+
     this.manualDisconnect = true;
 
     if (this.reconnectTimer) {
@@ -465,6 +489,49 @@ export class SquadClient {
 
       if (!this.isConnected()) {
         throw new Error("Client not connected. Call connect() first.");
+      }
+
+      if (config.provider?.type === 'anthropic') {
+        const apiKey =
+          config.provider.apiKey ??
+          process.env['ANTHROPIC_API_KEY'] ??
+          process.env.ANTHROPIC_API_KEY;
+
+        if (!apiKey) {
+          throw new Error(
+            'Anthropic provider requires an API key. ' +
+            'Set ANTHROPIC_API_KEY in your environment or pass config.provider.apiKey.'
+          );
+        }
+
+        const model = (config as Record<string, unknown>)['model'] as string | undefined
+          ?? 'claude-sonnet-4-6';
+        const systemPrompt = (config as Record<string, unknown>)['systemPrompt'] as
+          string | undefined;
+
+        const session = new AnthropicSessionAdapter(apiKey, model, systemPrompt, config.tools);
+        recordSessionCreated();
+
+        if (this.options.eventBus) {
+          const bus = this.options.eventBus;
+          const sid = session.sessionId;
+          session.on('usage', (event: SquadSessionEvent) => {
+            const inputTokens =
+              typeof event['inputTokens'] === 'number' ? event['inputTokens'] : 0;
+            const outputTokens =
+              typeof event['outputTokens'] === 'number' ? event['outputTokens'] : 0;
+            const cost = estimateCost(model, inputTokens, outputTokens);
+            void bus.emit({
+              type: 'session:message',
+              sessionId: sid,
+              payload: { inputTokens, outputTokens, model, estimatedCost: cost },
+              timestamp: new Date(),
+            });
+          });
+        }
+
+        span.setAttribute('session.provider', 'anthropic');
+        return session;
       }
 
       try {

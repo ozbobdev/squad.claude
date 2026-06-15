@@ -2,7 +2,7 @@
 
 ## Context
 
-You are working in the repo at `C:\Users\robma\dev\bradygaster\squad\`.
+You are working in the repo at `C:\Users\robma\dev\ozbobdev\squad.claude\ANTHROPIC_ADAPTER.md`.
 
 The `@bradygaster/squad-sdk` is currently hardwired to GitHub Copilot via
 `@github/copilot-sdk`. The type `SquadProviderConfig` in
@@ -11,8 +11,8 @@ valid provider type but it is never consumed. Your job is to wire it up end to
 end so that setting `config.provider.type === "anthropic"` routes sessions
 through the Anthropic Messages API instead of Copilot.
 
-> **Do not** modify `SquadSession` in `types.ts`, touch `CopilotSessionAdapter`,
-> or alter any existing exports in `package.json`.
+> **Do not** modify `SquadSession` in `types.ts`. Instead touch `CopilotSessionAdapter` in packages\squad-sdk\src\adapter\client.ts,
+Do not alter any existing exports in `package.json`.
 
 ---
 
@@ -286,7 +286,7 @@ npm run build
 ```
 
 Fix any TypeScript errors before finishing. The build must pass with zero
-errors. Warnings about `@github/copilot-sdk` internals are acceptable.
+errors. Warnings about `@anthropic-ai/sdk` internals are acceptable.
 
 ---
 

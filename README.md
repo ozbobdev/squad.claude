@@ -1,29 +1,103 @@
-# Squad
+# Squad — Claude Edition
 
 [English](README.md) | [中文](README.zh.md)
 
 **Human-led AI agent teams for any project.** One command. A team that helps you move faster with your code.
 
 [![Status](https://img.shields.io/badge/status-alpha-blueviolet)](#status)
-[![Platform](https://img.shields.io/badge/platform-GitHub%20Copilot-blue)](#what-is-squad)
+[![Platform](https://img.shields.io/badge/platform-Claude%20%7C%20Anthropic-orange)](#claude-quick-start)
 
 > ⚠️ **Alpha Software** — Squad is experimental. APIs and CLI commands may change between releases. We'll document breaking changes in [CHANGELOG.md](CHANGELOG.md).
+
+> **Origin** — This is a Claude-enabled fork of [bradygaster/squad](https://github.com/bradygaster/squad), which targets GitHub Copilot. The core Squad runtime, CLI, and SDK are unchanged; this fork adds the `AnthropicSessionAdapter` so you can run your agent team through Claude instead of Copilot. The Copilot path still works if you have a Copilot subscription.
+
+---
+
+## Claude Quick Start
+
+### 1. Get an Anthropic API key
+
+1. Go to [console.anthropic.com](https://console.anthropic.com) and sign in (or create a free account).
+2. In the left sidebar choose **API Keys**, then click **Create Key**.
+3. Copy the key — it starts with `sk-ant-`.
+
+### 2. Set the environment variable
+
+**PowerShell (Windows):**
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+To persist it across sessions, add it to your PowerShell profile or set it as a User environment variable in System Properties → Advanced → Environment Variables.
+
+**Bash / zsh (macOS / Linux / WSL):**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+Add that line to `~/.bashrc`, `~/.zshrc`, or `~/.bash_profile` to make it permanent.
+
+**Windows CMD:**
+```cmd
+set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**`.env` file (Node projects):**
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### 3. Verify the key is set
+
+```bash
+squad doctor
+```
+
+`squad doctor` checks your environment and reports whether `ANTHROPIC_API_KEY` is present.
+
+### 4. Use Squad with Claude via the SDK
+
+```typescript
+import { SquadClient } from '@bradygaster/squad-sdk/adapter';
+
+const client = new SquadClient({ anthropicMode: true });
+
+const session = await client.createSession({
+  provider: {
+    type: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    // apiKey omitted — read from ANTHROPIC_API_KEY env var
+  },
+  model: 'claude-sonnet-4-6',
+  systemPrompt: 'You are a TypeScript specialist on a multi-agent development team.',
+});
+
+session.on('message_delta', (e) => process.stdout.write(e['delta'] as string));
+session.on('idle', () => console.log('\n[done]'));
+
+await session.sendMessage({ prompt: 'Implement the routing logic for the coordinator.' });
+await session.close();
+```
+
+> **Model IDs** — Recommended defaults: `claude-sonnet-4-6` (balanced), `claude-haiku-4-5-20251001` (fast/cheap), `claude-opus-4-8` (most capable). Pass as `model` in `createSession`.
 
 ---
 
 ## What is Squad?
 
-Squad gives you a human-directed AI development team through GitHub Copilot. Describe what you're building. Get a team of specialists — frontend, backend, tester, lead — that live in your repo as files. They persist across sessions, learn your codebase, share decisions, and help you move faster without giving up oversight.
+Squad gives you a human-directed AI development team powered by Claude. Describe what you're building. Get a team of specialists — frontend, backend, tester, lead — that live in your repo as files. They persist across sessions, learn your codebase, share decisions, and help you move faster without giving up oversight.
 
 Squad is a productivity tool for humans, not a replacement for engineers, reviewers, or decision-makers. People stay accountable for priorities, approvals, and final changes; Squad helps with coordination, repetition, and parallel execution.
 
 It's not a chatbot wearing hats. Each team member runs in its own context, reads only its own knowledge, and writes back what it learned so the work stays inspectable.
 
-> **Responsible AI stance** — Squad is built to amplify a human operator with GitHub Copilot, not to remove humans from the loop. Use it to delegate faster, review better, and keep governance close to the code.
+> **Responsible AI stance** — Squad is built to amplify a human operator with Claude, not to remove humans from the loop. Use it to delegate faster, review better, and keep governance close to the code.
+
+> **Copilot users** — The original Squad project uses GitHub Copilot as its AI backend. This fork adds first-class Claude support via the Anthropic SDK. If you have a Copilot subscription the Copilot path is still fully functional — just omit `anthropicMode` and `provider.type: 'anthropic'` from your configuration.
 
 ---
 
-## Quick Start
+## Quick Start (Copilot path)
+
+> Using Claude? Skip to [Claude Quick Start](#claude-quick-start) at the top of this file.
 
 ### 1. Create your project
 
@@ -144,7 +218,7 @@ Say **"squad commands"** in chat to see a categorized menu of common operations 
 | `squad status` | Show which squad is active and why |
 | `squad triage` | **Watch mode** — poll for issues and auto-triage to team (aliases: `watch`, `loop`); use `--interval <minutes>` to set polling frequency (default: 10); with `--execute` dispatch Copilot agents; use `--agent-cmd`, `--copilot-flags`, `--auth-user` to customize agent execution; `--health` shows watch status; `--log-file` for diagnostics |
 | `squad copilot` | Add/remove the Copilot coding agent (@copilot); use `--off` to remove, `--auto-assign` to enable auto-assignment |
-| `squad doctor` | Check your setup and diagnose issues (alias: `heartbeat`) |
+| `squad doctor` | Check your setup and diagnose issues (alias: `heartbeat`); also reports whether `ANTHROPIC_API_KEY` is set |
 | `squad link <team-repo-path>` | Connect to a remote team |
 | `squad externalize` | Move `.squad/` state outside the working tree; survives branch switches; use `--key <name>` for custom project key |
 | `squad internalize` | Move externalized state back into `.squad/` |

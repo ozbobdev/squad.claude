@@ -62,6 +62,7 @@ export {
   findSquadByName,
 } from './runtime/cross-squad.js';
 
+export { checkAnthropicAuth } from './adapter/anthropic-adapter.js';
 export * from './marketplace/index.js';
 export * from './build/index.js';
 export * from './sharing/index.js';
