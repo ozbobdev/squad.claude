@@ -13,6 +13,16 @@ import { detectProjectType } from './project-type.js';
 import { getPackageVersion, stampVersion } from './version.js';
 import { initSquad as sdkInitSquad, cleanupOrphanInitPrompt, ensurePersonalSquadDir, resolvePersonalSquadDir, clearResolveSquadCache, type InitOptions } from '@bradygaster/squad-sdk';
 import { installGitHooks } from '../commands/install-hooks.js';
+import { liftInitMutableStateOntoOrphan } from '../commands/migrate-backend.js';
+import { resolveSquadStateMcpSpec } from './mcp-spec.js';
+import { describeMcpSpec } from './upgrade.js';
+import { ensureSquadStateMcpInRoot, tombstoneStaleSquadStateInProjectMcp } from './mcp-root.js';
+import {
+  readTeamMd,
+  writeTeamMd,
+  hasCopilot,
+  insertCopilotSection,
+} from './team-md.js';
 
 const storage = new FSStorageProvider();
 
@@ -222,6 +232,11 @@ export async function runInit(dest: string, options: RunInitOptions = {}): Promi
         name: 'Rai',
         role: 'Rai',
         displayName: 'Rai',
+      },
+      {
+        name: 'fact-checker',
+        role: 'fact-checker',
+        displayName: 'Fact Checker',
       }
     ],
     configFormat: options.sdk ? 'sdk' : 'markdown',
@@ -235,6 +250,7 @@ export async function runInit(dest: string, options: RunInitOptions = {}): Promi
     prompt: options.prompt,
     extractionDisabled: options.extractionDisabled,
     roles: options.roles,
+    stateBackend: options.stateBackend,
   };
 
   // Handle SIGINT to cleanup orphan .init-prompt
@@ -332,10 +348,72 @@ export async function runInit(dest: string, options: RunInitOptions = {}): Promi
 
         // Install git hooks for automatic state sync on push/pull
         installGitHooks(dest, { force: false });
+
+        // INSIDER3-INIT-LEAK fix: the SDK already wrote decisions.md and
+        // agents/<n>/history.md into the working tree (it had no knowledge of
+        // the backend choice at the time). Lift those mutable files onto the
+        // squad-state orphan branch and remove the working-tree copies so the
+        // backend is the single source of truth post-init.
+        try {
+          const lifted = liftInitMutableStateOntoOrphan(dest);
+          if (lifted.length > 0) {
+            success(`migrated ${lifted.length} mutable state file(s) onto squad-state branch (removed from working tree)`);
+          }
+        } catch (err) {
+          console.warn(`${YELLOW}⚠ Could not lift mutable state onto squad-state branch: ${err instanceof Error ? err.message : err}${RESET}`);
+        }
+
+        // GAP-2 fix: SDK init skips .copilot/mcp-config.json when it already
+        // exists (e.g. partially-squadified repo or pre-existing Copilot setup),
+        // leaving the bridge unwired. Force-insert/pin the squad_state entry so
+        // the MCP server is reachable regardless of pre-existing config.
+        // iter-8: write squad_state to repo-root `.mcp.json` (auto-loaded by
+        // Copilot CLI ≥1.0.59, which walks up from cwd to git root finding
+        // .mcp.json files — see sdk/index.js loader) and tombstone any
+        // stale project-level entry left by the SDK init writer in
+        // `.copilot/mcp-config.json`. No HOME modifications.
+        try {
+          const mcpSpec = await resolveSquadStateMcpSpec(getPackageVersion());
+          const rootResult = ensureSquadStateMcpInRoot(dest, getPackageVersion(), mcpSpec);
+          if (rootResult.written) {
+            success(`installed squad_state MCP server to .mcp.json (${describeMcpSpec(mcpSpec)}) — Copilot CLI will auto-load on next invocation`);
+            console.log(`${DIM}  to remove later: edit ${rootResult.path} and delete squad_state${RESET}`);
+          }
+          const tomb = tombstoneStaleSquadStateInProjectMcp(dest);
+          if (tomb.removed) {
+            success(`removed stale squad_state from ${tomb.path} (now lives in .mcp.json)`);
+          }
+        } catch (err) {
+          console.warn(`${YELLOW}⚠ Could not install squad_state MCP entry in .mcp.json: ${err instanceof Error ? err.message : err}${RESET}`);
+        }
       }
     } else {
       console.warn(`${YELLOW}⚠ Unknown state backend "${options.stateBackend}". Using default (local).${RESET}`);
     }
+  }
+
+  // iter-8: unconditionally mirror repo-root `.mcp.json` write + tombstone
+  // for vanilla `squad init` (no --state-backend flag) so the squad_state
+  // MCP entry is reachable regardless of init path. No HOME modifications.
+  try {
+    const mcpSpec = await resolveSquadStateMcpSpec(version);
+    const rootResult = ensureSquadStateMcpInRoot(dest, version, mcpSpec);
+    if (rootResult.written) {
+      success(`installed squad_state MCP server to .mcp.json (${describeMcpSpec(mcpSpec)}) — Copilot CLI will auto-load on next invocation`);
+    }
+    // iter-8: do NOT write to ~/.copilot/mcp-config.json. The repo-root
+    // .mcp.json write above is sufficient for Copilot CLI ≥1.0.59 (which
+    // walks up from cwd to git root looking for .mcp.json) AND for
+    // `copilot -p` invocations launched from the project root. Users who
+    // launch `copilot -p` from outside the project root should use
+    // `--additional-mcp-config @.mcp.json` (already documented at the end
+    // of this command). See bradygaster/squad#1296.
+    const tomb = tombstoneStaleSquadStateInProjectMcp(dest);
+    if (tomb.removed) {
+      success(`removed stale squad_state from ${tomb.path} (now lives in .mcp.json)`);
+    }
+  } catch {
+    // best-effort: .mcp.json write failure does not block init
   }
 
   // Report .init-prompt storage
@@ -355,6 +433,48 @@ export async function runInit(dest: string, options: RunInitOptions = {}): Promi
     console.log(`${DIM}${file} already exists — skipping${RESET}`);
   }
 
+  // ── Copilot agent prompt ───────────────────────────────────────────
+  // Ask if the user wants to add @copilot as an autonomous team member.
+  // This enables .github/copilot-instructions.md and adds Coding Agent
+  // to the team roster, allowing squad-labeled issues to be auto-assigned.
+  const teamContent = readTeamMd(squadDir);
+  if (!hasCopilot(teamContent)) {
+    if (process.stdin.isTTY) {
+      const { createInterface } = await import('node:readline/promises');
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        console.log();
+        const answer = (await rl.question(`  Add ${BOLD}@copilot${RESET} as an autonomous team member? [Y/n]: `)).trim().toLowerCase();
+        if (answer === '' || answer === 'y' || answer === 'yes') {
+          const updated = insertCopilotSection(teamContent, false);
+          writeTeamMd(squadDir, updated);
+          success('Added @copilot (Coding Agent) to team roster');
+
+          // Copy copilot-instructions.md from templates
+          const currentFileUrl = new URL(import.meta.url);
+          const currentFilePath = currentFileUrl.pathname.startsWith('/') && process.platform === 'win32'
+            ? currentFileUrl.pathname.substring(1)
+            : currentFileUrl.pathname;
+          const templatesSrc = path.resolve(path.dirname(currentFilePath), '..', '..', '..', 'templates');
+          const instructionsSrc = path.join(templatesSrc, 'copilot-instructions.md');
+          const instructionsDest = path.join(dest, '.github', 'copilot-instructions.md');
+
+          if (storage.existsSync(instructionsSrc) && !storage.existsSync(instructionsDest)) {
+            storage.mkdirSync(path.dirname(instructionsDest), { recursive: true });
+            storage.copySync(instructionsSrc, instructionsDest);
+            success('.github/copilot-instructions.md');
+          }
+        } else {
+          console.log(`${DIM}  Skipped — add later with: squad copilot enable${RESET}`);
+        }
+      } finally {
+        rl.close();
+      }
+    } else {
+      console.log(`${DIM}  Non-interactive mode — skipping @copilot setup. Add later with: squad copilot enable${RESET}`);
+    }
+  }
+
   // ── Celebration ceremony ──────────────────────────────────────────
   console.log();
   await typewrite(`${CYAN}${BOLD}◆ SQUAD${RESET}`, 10);
@@ -369,6 +489,9 @@ export async function runInit(dest: string, options: RunInitOptions = {}): Promi
   if (!isInitNoColor()) await sleep(80);
   console.log();
   console.log(`${GREEN}${BOLD}Squad initialized.${RESET} Run ${CYAN}${BOLD}copilot --agent squad${RESET} and tell it what you're building.`);
+  console.log();
+  console.log(`${DIM}Tip: for non-interactive scripts that need squad_state tools, add to package.json:${RESET}`);
+  console.log(`${DIM}  "squad:copilot": "copilot --agent squad --additional-mcp-config @.mcp.json"${RESET}`);
   console.log();
 
   // ── Personal squad bridge ───────────────────────────────────────────

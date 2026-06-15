@@ -41,6 +41,8 @@ npm install -g @bradygaster/squad-cli
 squad init
 ```
 
+> **⚡ Want to be up and running in under a second?** Use `squad init --preset default` to start with a fully-configured squad — complete with members, charters, and routing rules — ready to go immediately. The default `squad init` (without the flag) walks you through setup step by step, ideal if you prefer to build and customize your squad deliberately.
+
 **✓ Validate:** Check that `.squad/team.md` was created in your project.
 
 ### 3. Authenticate with GitHub (for Issues, PRs, and Ralph)
@@ -73,6 +75,10 @@ Here's what I'm building: a recipe sharing app with React and Node.
 Squad proposes a team — each member named from a persistent thematic cast. You say **yes**. They're ready.
 
 ---
+
+## .NET package preview
+
+Building a .NET app that should call a Squad team as a Microsoft Agent Framework agent? `Squad.Agents.AI` is a preview NuGet package under [`src/Squad.Agents.AI`](src/Squad.Agents.AI/README.md). It registers a Squad-backed `AIAgent` in DI and targets early `0.1.0-preview` consumers.
 
 ## Upgrading
 
@@ -119,6 +125,12 @@ npm run dev:link
 ```
 
 After `npm run dev:link`, the `squad` command will be available globally and will use your local build. To update after code changes, re-run `npm run build` to recompile.
+
+---
+
+## Quick Commands
+
+Say **"squad commands"** in chat to see a categorized menu of common operations — install & upgrade, team management, issues & PRs, plugins, model settings, and session state. You can also ask naturally: *"how do I switch state backends?"* or *"how do I add a team member?"* — Squad matches your intent and walks you through it. The `squad-commands` skill ships out of the box with every `squad init` and `squad upgrade`.
 
 ---
 
