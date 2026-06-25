@@ -5,9 +5,21 @@
  * Uses vi.mock to stub CopilotClient since it requires a real CLI server.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SquadClient, type SquadClientOptions } from '@bradygaster/squad-sdk/client';
 import { CopilotClient } from '@github/copilot-sdk';
+import { AnthropicSessionAdapter } from '../packages/squad-sdk/src/adapter/anthropic-adapter.js';
+import { loadConfig } from '../packages/squad-sdk/src/runtime/config.js';
+
+// Mock Anthropic SDK — prevents real HTTP calls; we only test adapter selection here
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: vi.fn().mockImplementation(() => ({})),
+}));
+
+// Mock loadConfig so tests don't walk the filesystem
+vi.mock('../packages/squad-sdk/src/runtime/config.js', () => ({
+  loadConfig: vi.fn(),
+}));
 
 // Mock CopilotClient
 vi.mock('@github/copilot-sdk', () => {
@@ -515,5 +527,112 @@ describe('SquadClient — Event Subscriptions', () => {
     const unsubscribe = client.on(handler);
 
     expect(unsubscribe).toBeInstanceOf(Function);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Anthropic Adapter selection
+// ---------------------------------------------------------------------------
+
+function makeSquadConfig(provider: 'copilot' | 'anthropic' = 'copilot') {
+  return {
+    config: {
+      version: '1.0.0',
+      provider,
+      models: {
+        defaultModel: 'claude-sonnet-4-6',
+        defaultTier: 'standard' as const,
+        fallbackChains: { premium: [] as string[], standard: [] as string[], fast: [] as string[] },
+        preferSameProvider: true,
+        respectTierCeiling: true,
+        nuclearFallback: { enabled: false, model: 'claude-haiku-4-5', maxRetriesBeforeNuclear: 3 },
+      },
+      routing: {
+        rules: [],
+        governance: { eagerByDefault: true, scribeAutoRuns: false, allowRecursiveSpawn: false },
+      },
+    },
+    source: 'default',
+    isDefault: true,
+  };
+}
+
+describe('SquadClient — Anthropic Adapter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(loadConfig).mockResolvedValue(makeSquadConfig('copilot') as never);
+    process.env['ANTHROPIC_API_KEY'] = 'test-anthropic-key';
+  });
+
+  afterEach(() => {
+    delete process.env['ANTHROPIC_API_KEY'];
+  });
+
+  it('returns AnthropicSessionAdapter when options.anthropicMode is true', async () => {
+    const client = new SquadClient({ anthropicMode: true });
+    const session = await client.createSession();
+
+    expect(session).toBeInstanceOf(AnthropicSessionAdapter);
+    expect(session.sessionId).toBeDefined();
+    const copilotInstance = (CopilotClient as unknown as ReturnType<typeof vi.fn>).mock.results[0].value;
+    expect(copilotInstance.createSession).not.toHaveBeenCalled();
+  });
+
+  it('returns AnthropicSessionAdapter when squad config provider is "anthropic"', async () => {
+    vi.mocked(loadConfig).mockResolvedValueOnce(makeSquadConfig('anthropic') as never);
+    const client = new SquadClient();
+    const session = await client.createSession();
+
+    expect(session).toBeInstanceOf(AnthropicSessionAdapter);
+    expect(session.sessionId).toBeDefined();
+    const copilotInstance = (CopilotClient as unknown as ReturnType<typeof vi.fn>).mock.results[0].value;
+    expect(copilotInstance.createSession).not.toHaveBeenCalled();
+  });
+
+  it('returns AnthropicSessionAdapter when session config provider.type is "anthropic"', async () => {
+    const client = new SquadClient();
+    const session = await client.createSession({
+      provider: { type: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'test-anthropic-key' },
+    });
+
+    expect(session).toBeInstanceOf(AnthropicSessionAdapter);
+    expect(session.sessionId).toBeDefined();
+  });
+
+  it('uses apiKey from session config when env var is absent', async () => {
+    delete process.env['ANTHROPIC_API_KEY'];
+    const client = new SquadClient({ anthropicMode: true });
+    const session = await client.createSession({
+      provider: { type: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'explicit-test-key' },
+    });
+
+    expect(session).toBeInstanceOf(AnthropicSessionAdapter);
+  });
+
+  it('throws when anthropicMode is true but no API key is available', async () => {
+    delete process.env['ANTHROPIC_API_KEY'];
+    const client = new SquadClient({ anthropicMode: true });
+
+    await expect(client.createSession()).rejects.toThrow('ANTHROPIC_API_KEY');
+  });
+
+  it('skips Copilot CLI connection when anthropicMode is true', async () => {
+    const client = new SquadClient({ anthropicMode: true, autoStart: true });
+    expect(client.isConnected()).toBe(false);
+
+    await client.createSession();
+
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it('returned session implements SquadSession interface', async () => {
+    const client = new SquadClient({ anthropicMode: true });
+    const session = await client.createSession();
+
+    expect(typeof session.on).toBe('function');
+    expect(typeof session.off).toBe('function');
+    expect(typeof session.sendMessage).toBe('function');
+    expect(typeof session.abort).toBe('function');
+    expect(typeof session.close).toBe('function');
   });
 });

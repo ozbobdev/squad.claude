@@ -279,33 +279,46 @@ export interface PlatformOverrides {
 }
 
 /**
+ * Backend provider for Squad sessions.
+ * - `'copilot'` — GitHub Copilot CLI (default)
+ * - `'anthropic'` — Anthropic API directly (requires ANTHROPIC_API_KEY)
+ */
+export type SquadProviderType = 'copilot' | 'anthropic';
+
+/**
  * Root Squad configuration object.
  */
 export interface SquadConfig {
   /** Config schema version */
   version: string;
-  
+
+  /**
+   * Backend provider for all sessions created by SquadClient.
+   * @default 'copilot'
+   */
+  provider?: SquadProviderType;
+
   /** Model selection configuration */
   models: ModelSelectionConfig;
-  
+
   /** Routing configuration */
   routing: RoutingConfig;
-  
+
   /** Casting policy configuration */
   casting?: CastingPolicy;
-  
+
   /** Agent source configurations */
   agentSources?: AgentSourceConfig[];
-  
+
   /** MCP integration configuration (pass-through to SDK) */
   mcp?: {
     servers?: Record<string, unknown>;
     [key: string]: unknown;
   };
-  
+
   /** Platform-specific overrides */
   platforms?: PlatformOverrides;
-  
+
   /** Custom extensions */
   [key: string]: unknown;
 }
@@ -319,6 +332,7 @@ export interface SquadConfig {
  */
 export const DEFAULT_CONFIG: SquadConfig = {
   version: '1.0.0',
+  provider: 'copilot',
   models: {
     defaultModel: MODELS.DEFAULT,
     defaultTier: 'standard',
@@ -591,7 +605,12 @@ export function validateConfigDetailed(config: unknown): ValidationResult {
   if (!cfg.version || typeof cfg.version !== 'string') {
     errors.push('config.version is required and must be a string');
   }
-  
+
+  // Validate provider
+  if (cfg.provider !== undefined && !['copilot', 'anthropic'].includes(cfg.provider as string)) {
+    errors.push('config.provider must be "copilot" or "anthropic"');
+  }
+
   // Validate models section
   if (!cfg.models) {
     errors.push('config.models is required');

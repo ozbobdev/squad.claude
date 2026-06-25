@@ -76,6 +76,56 @@ Squad proposes a team — each member named from a persistent thematic cast. You
 
 ---
 
+## Claude (Anthropic) Quick Start
+
+### 1. Get an Anthropic API key
+
+1. Go to [console.anthropic.com](https://console.anthropic.com) and sign in (or create a free account).
+2. In the left sidebar choose **API Keys**, then click **Create Key**.
+3. Copy the key — it starts with `sk-ant-`.
+
+### 2. Set the environment variable
+
+**PowerShell (Windows):**
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+
+### 3. Set `provider` in your Squad config
+
+Add `provider: 'anthropic'` to your config file. `SquadClient` reads this on the first `createSession` call and skips the Copilot CLI entirely.
+
+**`.squad/config.json`**
+```json
+{
+  "version": "1.0.0",
+  "provider": "anthropic"
+}
+```
+
+The accepted values are `"copilot"` (default) and `"anthropic"`. Omitting the field is the same as `"copilot"`.
+
+Alternatively:
+**`squad.config.ts`**
+```typescript
+export default {
+  version: '1.0.0',
+  provider: 'anthropic',
+  models: {
+    defaultModel: 'claude-sonnet-4-6',
+    defaultTier: 'standard',
+    fallbackChains: { premium: [], standard: [], fast: [] },
+  },
+  routing: {
+    rules: [],
+    governance: { eagerByDefault: true, scribeAutoRuns: false, allowRecursiveSpawn: false },
+  },
+};
+```
+
+
+---
+
 ## .NET package preview
 
 Building a .NET app that should call a Squad team as a Microsoft Agent Framework agent? `Squad.Agents.AI` is a preview NuGet package under [`src/Squad.Agents.AI`](src/Squad.Agents.AI/README.md). It registers a Squad-backed `AIAgent` in DI and targets early `0.1.0-preview` consumers.

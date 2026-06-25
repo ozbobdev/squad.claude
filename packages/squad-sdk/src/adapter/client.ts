@@ -8,9 +8,13 @@
  */
 
 import { CopilotClient } from "@github/copilot-sdk";
+import { AnthropicSessionAdapter } from './anthropic-adapter.js';
+import { CopilotSessionAdapter } from './copilot-adapter.js';
 import { trace, SpanStatusCode } from '../runtime/otel-api.js';
 import { recordSessionCreated, recordSessionClosed, recordSessionError, recordTokenUsage } from '../runtime/otel-metrics.js';
 import { estimateCost } from '../config/models.js';
+import { loadConfig } from '../runtime/config.js';
+import type { SquadConfig } from '../runtime/config.js';
 import type { EventBus } from '../runtime/event-bus.js';
 import type { UsageEvent } from '../runtime/streaming.js';
 import type { 
@@ -30,115 +34,6 @@ import type {
 } from "./types.js";
 
 const tracer = trace.getTracer('squad-sdk');
-
-/**
- * Adapts @github/copilot-sdk CopilotSession to our SquadSession interface.
- * Maps sendMessage() → send(), off() via unsubscribe tracking, close() → destroy().
- *
- * Bug reported by @spboyer (Shayne Boyer) — Codespace environment exposed
- * the unsafe `as unknown as` cast that skipped runtime method mapping.
- */
-class CopilotSessionAdapter implements SquadSession {
-  /**
-   * Maps Squad short event names → @github/copilot-sdk dotted event names.
-   * SDK uses dotted-namespace prefixes (e.g., `assistant.message_delta`),
-   * while Squad uses short names (e.g., `message_delta`).
-   * Names already in dotted form pass through via the fallback.
-   */
-  private static readonly EVENT_MAP: Record<string, string> = {
-    'message_delta': 'assistant.message_delta',
-    'message': 'assistant.message',
-    'usage': 'assistant.usage',
-    'reasoning_delta': 'assistant.reasoning_delta',
-    'reasoning': 'assistant.reasoning',
-    'turn_start': 'assistant.turn_start',
-    'turn_end': 'assistant.turn_end',
-    'intent': 'assistant.intent',
-    'idle': 'session.idle',
-    'error': 'session.error',
-  };
-
-  /** Reverse map: SDK dotted names → Squad short names. */
-  private static readonly REVERSE_EVENT_MAP: Record<string, string> = Object.fromEntries(
-    Object.entries(CopilotSessionAdapter.EVENT_MAP).map(([k, v]) => [v, k])
-  );
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly inner: any;
-  private readonly unsubscribers = new Map<SquadSessionEventHandler, Map<string, () => void>>();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(copilotSession: any) {
-    this.inner = copilotSession;
-  }
-
-  get sessionId(): string {
-    return this.inner.sessionId ?? 'unknown';
-  }
-
-  async sendMessage(options: SquadMessageOptions): Promise<void> {
-    await this.inner.send(options);
-  }
-
-  async sendAndWait(options: SquadMessageOptions, timeout?: number): Promise<unknown> {
-    return await this.inner.sendAndWait(options, timeout);
-  }
-
-  async abort(): Promise<void> {
-    await this.inner.abort();
-  }
-
-  async getMessages(): Promise<unknown[]> {
-    return await this.inner.getMessages();
-  }
-
-  /**
-   * Normalizes an SDK event into a SquadSessionEvent.
-   * Maps the dotted type back to the Squad short name and
-   * flattens `event.data` onto the top-level object so callers
-   * can access fields directly (e.g., `event.inputTokens`).
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private static normalizeEvent(sdkEvent: any): SquadSessionEvent {
-    const squadType = CopilotSessionAdapter.REVERSE_EVENT_MAP[sdkEvent.type] ?? sdkEvent.type;
-    return {
-      type: squadType,
-      ...(sdkEvent.data ?? {}),
-    };
-  }
-
-  on(eventType: SquadSessionEventType, handler: SquadSessionEventHandler): void {
-    const sdkType = CopilotSessionAdapter.EVENT_MAP[eventType] ?? eventType;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const wrappedHandler = (sdkEvent: any) => {
-      handler(CopilotSessionAdapter.normalizeEvent(sdkEvent));
-    };
-    const unsubscribe = this.inner.on(sdkType, wrappedHandler);
-    if (!this.unsubscribers.has(handler)) {
-      this.unsubscribers.set(handler, new Map());
-    }
-    this.unsubscribers.get(handler)!.set(eventType, unsubscribe);
-  }
-
-  off(eventType: SquadSessionEventType, handler: SquadSessionEventHandler): void {
-    const handlerMap = this.unsubscribers.get(handler);
-    if (handlerMap) {
-      const unsubscribe = handlerMap.get(eventType);
-      if (unsubscribe) {
-        unsubscribe();
-        handlerMap.delete(eventType);
-      }
-      if (handlerMap.size === 0) {
-        this.unsubscribers.delete(handler);
-      }
-    }
-  }
-
-  async close(): Promise<void> {
-    await this.inner.destroy();
-    this.unsubscribers.clear();
-  }
-}
 
 /**
  * Connection state for SquadClient.
@@ -239,6 +134,13 @@ export interface SquadClientOptions {
    * @default 1000
    */
   reconnectDelayMs?: number;
+
+  /**
+   * Skip Copilot CLI startup and route all sessions through the Anthropic adapter.
+   * Requires ANTHROPIC_API_KEY or config.provider.apiKey on each createSession call.
+   * @default false
+   */
+  anthropicMode?: boolean;
 }
 
 /**
@@ -278,6 +180,7 @@ export class SquadClient {
     eventBus?: EventBus;
   };
   private manualDisconnect: boolean = false;
+  private squadConfig: SquadConfig | null = null;
 
   /**
    * Creates a new SquadClient instance.
@@ -302,6 +205,7 @@ export class SquadClient {
       maxReconnectAttempts: options.maxReconnectAttempts ?? 3,
       reconnectDelayMs: options.reconnectDelayMs ?? 1000,
       eventBus: options.eventBus,
+      anthropicMode: options.anthropicMode ?? false,
     };
 
     this.client = new CopilotClient({
@@ -458,13 +362,22 @@ export class SquadClient {
   async createSession(config: SquadSessionConfig = {}): Promise<SquadSession> {
     const span = tracer.startSpan('squad.session.create');
     span.setAttribute('session.auto_start', this.options.autoStart);
-    try {
-      if (!this.isConnected() && this.options.autoStart) {
-        await this.connect();
-      }
+    if (!this.squadConfig) {
+      this.squadConfig = (await loadConfig(this.options.cwd)).config;
+    }
+    const useAnthropic = this.options.anthropicMode
+      || this.squadConfig.provider === 'anthropic'
+      || config.provider?.type === 'anthropic';
 
-      if (!this.isConnected()) {
-        throw new Error("Client not connected. Call connect() first.");
+    try {
+      if (!useAnthropic) {
+        if (!this.isConnected() && this.options.autoStart) {
+          await this.connect();
+        }
+
+        if (!this.isConnected()) {
+          throw new Error("Client not connected. Call connect() first.");
+        }
       }
 
       try {
@@ -484,14 +397,32 @@ export class SquadClient {
               },
             }
           : config;
-        // Cast config to handle SDK version differences in SessionConfig type
-        const session = await this.client.createSession(normalizedConfig as unknown as Parameters<typeof this.client.createSession>[0]);
-        const result = new CopilotSessionAdapter(session);
+
+        let result: SquadSession;
+        if (useAnthropic) {
+          const apiKey = config.provider?.apiKey ?? process.env['ANTHROPIC_API_KEY'];
+          if (!apiKey) {
+            throw new Error(
+              'Anthropic provider requires an API key. ' +
+              'Set ANTHROPIC_API_KEY in your environment or pass config.provider.apiKey.'
+            );
+          }
+          const anthropicConfig: SquadSessionConfig = {
+            ...normalizedConfig,
+            model: normalizedConfig.model ?? 'claude-sonnet-4-6',
+            provider: { type: 'anthropic', baseUrl: 'https://api.anthropic.com', ...config.provider, apiKey },
+          };
+          span.setAttribute('session.provider', 'anthropic');
+          result = new AnthropicSessionAdapter(anthropicConfig);
+        } else {
+          // Cast config to handle SDK version differences in SessionConfig type
+          const session = await this.client.createSession(normalizedConfig as unknown as Parameters<typeof this.client.createSession>[0]);
+          result = new CopilotSessionAdapter(session);
+        }
         if (result.sessionId) {
           span.setAttribute('session.id', result.sessionId);
         }
         recordSessionCreated();
-
         // Auto-forward usage events to EventBus when one is configured
         if (this.options.eventBus) {
           const bus = this.options.eventBus;
