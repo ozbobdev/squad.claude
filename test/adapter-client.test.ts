@@ -24,8 +24,8 @@ vi.mock('../packages/squad-sdk/src/runtime/config.js', () => ({
 // Mock CopilotClient
 vi.mock('@github/copilot-sdk', () => {
   return {
-    CopilotClient: vi.fn().mockImplementation(() => {
-      return {
+    CopilotClient: vi.fn(function (this: object) {
+      Object.assign(this, {
         start: vi.fn().mockResolvedValue(undefined),
         stop: vi.fn().mockResolvedValue([]),
         forceStop: vi.fn().mockResolvedValue(undefined),
@@ -49,7 +49,7 @@ vi.mock('@github/copilot-sdk', () => {
         getAuthStatus: vi.fn().mockResolvedValue({ authenticated: true }),
         listModels: vi.fn().mockResolvedValue([]),
         on: vi.fn().mockReturnValue(() => {}),
-      };
+      });
     }),
   };
 });
