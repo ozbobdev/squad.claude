@@ -1,5 +1,37 @@
 # @bradygaster/squad-sdk
 
+## 0.11.0
+
+### Minor Changes
+
+- 97464bb: Add Anthropic (Claude) provider support as an alternative to GitHub Copilot
+
+  `SquadClient` can now route sessions through the Anthropic API directly, removing the dependency on the Copilot CLI for Anthropic-backed teams.
+
+  **`SquadClientOptions.anthropicMode`** — skips Copilot CLI startup entirely:
+
+  ```typescript
+  const client = new SquadClient({ anthropicMode: true });
+  ```
+
+  **Squad config `provider` field** — set once, applies to all sessions:
+
+  ```json
+  { "version": "1.0.0", "provider": "anthropic" }
+  ```
+
+  **Per-session override** — pass `provider` on individual `createSession` calls:
+
+  ```typescript
+  await client.createSession({
+    provider: { type: 'anthropic', apiKey: 'sk-ant-...' }
+  });
+  ```
+
+  Adapter selection priority (first match wins): `anthropicMode` option → squad config `provider` → session `provider.type`. When none match, behaviour is unchanged and sessions use the Copilot CLI.
+
+  Requires `ANTHROPIC_API_KEY` in the environment or an explicit `apiKey` in the provider config.
+
 ## 0.10.0
 
 ### Minor Changes

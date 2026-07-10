@@ -51,6 +51,9 @@ artifacts/
 # NOTE: .squad/casting/* is AUTHORITATIVE IDENTITY and MUST be committed to main.
 # Do not add .squad/casting/ to this ignore list.
 
+# Claude Code local config (personal hooks, settings)
+.claude/
+
 # windows ignore line endings
 # Set the default behavior, in case people don't have core.autocrlf set.
 * text=auto
