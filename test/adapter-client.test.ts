@@ -12,13 +12,34 @@ import { AnthropicSessionAdapter } from '../packages/squad-sdk/src/adapter/anthr
 import { loadConfig } from '../packages/squad-sdk/src/runtime/config.js';
 
 // Mock Anthropic SDK — prevents real HTTP calls; we only test adapter selection here
+// Must use `function` (not arrow) so the mock can be called with `new`
 vi.mock('@anthropic-ai/sdk', () => ({
-  default: vi.fn().mockImplementation(() => ({})),
+  default: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
-// Mock loadConfig so tests don't walk the filesystem
+// Mock loadConfig so tests don't walk the filesystem.
+// Default returns a minimal copilot config; Anthropic Adapter tests override via mockResolvedValue.
 vi.mock('../packages/squad-sdk/src/runtime/config.js', () => ({
-  loadConfig: vi.fn(),
+  loadConfig: vi.fn().mockResolvedValue({
+    config: {
+      version: '1.0.0',
+      provider: 'copilot',
+      models: {
+        defaultModel: 'claude-sonnet-4-6',
+        defaultTier: 'standard',
+        fallbackChains: { premium: [] as string[], standard: [] as string[], fast: [] as string[] },
+        preferSameProvider: true,
+        respectTierCeiling: true,
+        nuclearFallback: { enabled: false, model: 'claude-haiku-4-5', maxRetriesBeforeNuclear: 3 },
+      },
+      routing: {
+        rules: [],
+        governance: { eagerByDefault: true, scribeAutoRuns: false, allowRecursiveSpawn: false },
+      },
+    },
+    source: 'default',
+    isDefault: true,
+  }),
 }));
 
 // Mock CopilotClient

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { resolve } from 'path';
 
 export default defineConfig({
   resolve: {
@@ -7,6 +8,11 @@ export default defineConfig({
     // Without this, vi.mock('@bradygaster/squad-sdk') targets the root copy
     // but the code under test imports from the duplicate — bypassing the mock.
     dedupe: ['@bradygaster/squad-sdk'],
+    // Map the package entry point to source so vi.mock paths match what the
+    // code under test imports (both use packages/squad-sdk/src/...).
+    alias: {
+      '@bradygaster/squad-sdk/client': resolve(__dirname, 'packages/squad-sdk/src/client/index.ts'),
+    },
   },
   test: {
     include: ['test/**/*.test.ts'],
